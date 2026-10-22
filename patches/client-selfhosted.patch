@@ -1,0 +1,54 @@
+diff --git a/CMakeLists.txt b/CMakeLists.txt
+index 01bbf4a..cd01a98 100644
+--- a/CMakeLists.txt
++++ b/CMakeLists.txt
+@@ -76,12 +76,24 @@ endif()
+ # NOTE: keep this *before* our strict -Werror flags below, so TDLib does not inherit them.
+ include(FetchContent)
+ set(TD_COMMIT "a17f87c4cff7b90b278d12b91ba0614383aaee82") # tdlib/td master, pinned
++# Self-hosted CatGram patch set for TDLib (DC + RSA + api credentials).
++# Point TD_PATCH_DIR at a local checkout, or drop the patch files over a clone
++# of ${TD_COMMIT} and pass that path. Empty keeps stock Telegram behaviour.
++set(TD_PATCH_DIR "" CACHE PATH "Path to a TDLib source tree patched for the self-hosted server")
++if(TD_PATCH_DIR)
++  FetchContent_Declare(td
++    SOURCE_DIR "${TD_PATCH_DIR}"
++    EXCLUDE_FROM_ALL
++    SYSTEM # treat TDLib headers as system includes, so our -Werror does not apply to them
++  )
++else()
+ FetchContent_Declare(td
+   URL https://github.com/tdlib/td/archive/${TD_COMMIT}.tar.gz
+   DOWNLOAD_EXTRACT_TIMESTAMP TRUE # use extraction time for timestamps (CMP0135 NEW behavior)
+   EXCLUDE_FROM_ALL
+   SYSTEM # treat TDLib headers as system includes, so our -Werror does not apply to them
+ )
++endif()
+ FetchContent_MakeAvailable(td)
+ 
+ # Download AppImage build tooling (linuxdeploy, GTK plugin, appimagetool).
+diff --git a/src/telegram/telegram-client.cc b/src/telegram/telegram-client.cc
+index ae9c07b..5f8a8f0 100644
+--- a/src/telegram/telegram-client.cc
++++ b/src/telegram/telegram-client.cc
+@@ -219,7 +219,10 @@ void TelegramClient::set_credentials(std::int32_t api_id, const std::string& api
+ 
+ bool TelegramClient::has_credentials() const
+ {
+-  return api_id_ != 0 && !api_hash_.empty();
++  // Self-hosted builds: the patched TDLib supplies the credentials itself, so
++  // the login form does not need TG_APP_ID / TG_APP_HASH. Empty values are
++  // still acceptable here; TDLib rejects them when it has no fallback either.
++  return true;
+ }
+ 
+ void TelegramClient::start()
+@@ -706,6 +709,8 @@ void TelegramClient::on_authorization_state(td_api::object_ptr<td_api::Authoriza
+     parameters->use_message_database_ = true;
+     parameters->use_chat_info_database_ = true;
+     parameters->use_file_database_ = true;
++    // api_id_ == 0 leaves the fields untouched: the patched TDLib fills in the
++    // self-hosted server's credentials (SELF_HOSTED_API_ID / _HASH).
+     parameters->api_id_ = api_id_;
+     parameters->api_hash_ = api_hash_;
+     parameters->system_language_code_ = "en";

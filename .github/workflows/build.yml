@@ -1,0 +1,122 @@
+name: build
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+    inputs:
+      dc_host:
+        description: MTProto host the client should connect to
+        default: 62.220.127.238
+      dc_port:
+        description: MTProto port
+        default: "30001"
+
+env:
+  TD_COMMIT: a17f87c4cff7b90b278d12b91ba0614383aaee82
+  RETRO_REPO: https://github.com/RetroMessenger/retro-messenger.git
+
+jobs:
+  build-linux:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install system deps
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y build-essential cmake ninja-build pkg-config gperf \
+            libgtkmm-4.0-dev libx11-dev libssl-dev zlib1g-dev \
+            libgstreamer1.0-dev libgstreamer-plugins-base1.0-dev \
+            libgl1-mesa-dev
+
+      - name: Fetch and patch TDLib
+        run: |
+          curl -sSL "https://github.com/tdlib/td/archive/${TD_COMMIT}.tar.gz" -o td.tar.gz
+          tar xzf td.tar.gz
+          mv "td-${TD_COMMIT}" td
+          cd td && patch -p1 < ../patches/tdlib-selfhosted.patch
+
+      - name: Fetch Retro Messenger
+        run: |
+          git clone --depth 1 "$RETRO_REPO" retro
+          cd retro && git apply ../patches/client-selfhosted.patch
+
+      - name: Configure
+        run: |
+          cd retro
+          cmake -B build -GNinja \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DTD_PATCH_DIR="$GITHUB_WORKSPACE/td" \
+            -DSELF_HOSTED_DC_HOST="${{ inputs.dc_host || '62.220.127.238' }}" \
+            -DSELF_HOSTED_DC_PORT="${{ inputs.dc_port || '30001' }}"
+
+      - name: Build
+        run: cmake --build retro/build -j "$(nproc)"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: retro-messenger-linux-x86_64
+          path: retro/build/src/retro-messenger
+          if-no-files-found: error
+
+  build-macos:
+    runs-on: macos-14
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install system deps
+        run: brew install gtkmm4 gstreamer gst-plugins-base ninja pkg-config gperf
+
+      - name: Fetch and patch TDLib
+        run: |
+          curl -sSL "https://github.com/tdlib/td/archive/${TD_COMMIT}.tar.gz" -o td.tar.gz
+          tar xzf td.tar.gz
+          mv "td-${TD_COMMIT}" td
+          cd td && patch -p1 < ../patches/tdlib-selfhosted.patch
+
+      - name: Fetch Retro Messenger
+        run: |
+          git clone --depth 1 "$RETRO_REPO" retro
+          cd retro
+          git apply ../patches/client-selfhosted.patch
+          git apply ../patches/client-calls-macos.patch
+
+      - name: Configure
+        run: |
+          cd retro
+          cmake -B build -GNinja \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DTD_PATCH_DIR="$GITHUB_WORKSPACE/td" \
+            -DSELF_HOSTED_DC_HOST="${{ inputs.dc_host || '62.220.127.238' }}" \
+            -DSELF_HOSTED_DC_PORT="${{ inputs.dc_port || '30001' }}"
+
+      - name: Build
+        run: cmake --build retro/build -j "$(sysctl -n hw.ncpu)"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: retro-messenger-macos-arm64
+          path: retro/build/src/retro-messenger
+          if-no-files-found: error
+
+  verify-tdlib:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install TDLib build deps
+        run: sudo apt-get install -y build-essential cmake gperf libssl-dev zlib1g-dev
+
+      - name: Patch and compile tdcore
+        run: |
+          curl -sSL "https://github.com/tdlib/td/archive/${TD_COMMIT}.tar.gz" -o td.tar.gz
+          tar xzf td.tar.gz
+          mv "td-${TD_COMMIT}" td
+          cd td && patch -p1 < ../patches/tdlib-selfhosted.patch
+          cmake -B build -DCMAKE_BUILD_TYPE=Release -DTD_ENABLE_LTO=OFF
+          cmake --build build --target tdcore -j "$(nproc)"
+
+      - name: Show the generated server config
+        run: cat td/td/telegram/net/SelfHostedServer.h

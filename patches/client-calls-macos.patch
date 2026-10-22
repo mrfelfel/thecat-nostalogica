@@ -1,0 +1,137 @@
+diff --git a/cmake/Ntgcalls.cmake b/cmake/Ntgcalls.cmake
+index 1030d3a..bf97edc 100644
+--- a/cmake/Ntgcalls.cmake
++++ b/cmake/Ntgcalls.cmake
+@@ -38,47 +38,77 @@ if(NOT CALLS)
+   return()
+ endif()
+ 
+-# Prebuilt binaries currently integrated for Linux only (matches CI/packaging).
+-# Windows/macOS zips exist upstream; wire them up when those platforms get
+-# release builds again.
+-if(NOT (UNIX AND NOT APPLE))
++# Prebuilt binaries for Linux (x86_64, arm64) and macOS (arm64). The macOS
++# archive is upstream and unsigned; CI ad-hoc signs it before use.
++if(NOT (UNIX OR APPLE))
+   message(STATUS "Voice/video calls: disabled (no prebuilt ntgcalls integration for this platform yet)")
+   return()
+ endif()
+ 
+ set(NTGCALLS_VERSION "2.2.5")
+-if(CMAKE_SYSTEM_PROCESSOR MATCHES "^(aarch64|arm64)$")
+-  set(NTGCALLS_ARCH "arm64")
++if(APPLE)
++  if(CMAKE_SYSTEM_PROCESSOR MATCHES "^(aarch64|arm64)$")
++    set(NTGCALLS_PLATFORM "macos-arm64")
++    set(NTGCALLS_SHA256 "")
++    set(NTGCALLS_LIB_NAME "libntgcalls.dylib")
++  else()
++    message(STATUS "Voice/video calls: disabled (no prebuilt ntgcalls for macOS ${CMAKE_SYSTEM_PROCESSOR})")
++    return()
++  endif()
++elseif(CMAKE_SYSTEM_PROCESSOR MATCHES "^(aarch64|arm64)$")
++  set(NTGCALLS_PLATFORM "linux-arm64")
+   set(NTGCALLS_SHA256 "b36df40889b894c520bd6d7f176507090353b6c07d57cffbab9345476a93dae1")
++  set(NTGCALLS_LIB_NAME "libntgcalls.so")
+ elseif(CMAKE_SYSTEM_PROCESSOR MATCHES "^(x86_64|amd64)$")
+-  set(NTGCALLS_ARCH "x86_64")
++  set(NTGCALLS_PLATFORM "linux-x86_64")
+   set(NTGCALLS_SHA256 "35ab2eff25e6d64e79b3fc537bca970ad4d9a63f4d7ab893fb0bba7f3c1e3987")
++  set(NTGCALLS_LIB_NAME "libntgcalls.so")
+ else()
+   message(STATUS "Voice/video calls: disabled (no prebuilt ntgcalls for ${CMAKE_SYSTEM_PROCESSOR})")
+   return()
+ endif()
+ 
+ include(FetchContent)
+-FetchContent_Declare(ntgcalls_prebuilt
+-  URL https://github.com/pytgcalls/ntgcalls/releases/download/v${NTGCALLS_VERSION}/ntgcalls.linux-${NTGCALLS_ARCH}-shared_libs.zip
+-  URL_HASH SHA256=${NTGCALLS_SHA256}
+-  DOWNLOAD_EXTRACT_TIMESTAMP TRUE
+-)
++if(NTGCALLS_SHA256)
++  FetchContent_Declare(ntgcalls_prebuilt
++    URL https://github.com/pytgcalls/ntgcalls/releases/download/v${NTGCALLS_VERSION}/ntgcalls.${NTGCALLS_PLATFORM}-shared_libs.zip
++    URL_HASH SHA256=${NTGCALLS_SHA256}
++    DOWNLOAD_EXTRACT_TIMESTAMP TRUE
++  )
++else()
++  FetchContent_Declare(ntgcalls_prebuilt
++    URL https://github.com/pytgcalls/ntgcalls/releases/download/v${NTGCALLS_VERSION}/ntgcalls.${NTGCALLS_PLATFORM}-shared_libs.zip
++    DOWNLOAD_EXTRACT_TIMESTAMP TRUE
++  )
++endif()
+ FetchContent_MakeAvailable(ntgcalls_prebuilt)
+ 
+-set(NTGCALLS_LIBRARY "${ntgcalls_prebuilt_SOURCE_DIR}/lib/libntgcalls.so")
++set(NTGCALLS_LIBRARY "${ntgcalls_prebuilt_SOURCE_DIR}/lib/${NTGCALLS_LIB_NAME}")
+ set(NTGCALLS_INCLUDE_DIR "${ntgcalls_prebuilt_SOURCE_DIR}/include")
+ 
++if(APPLE)
++  # Gatekeeper refuses to dlopen an unsigned Mach-O; ad-hoc sign the copy we use.
++  add_custom_command(OUTPUT "${NTGCALLS_LIBRARY}.signed"
++    COMMAND codesign -s - -f "${NTGCALLS_LIBRARY}"
++    COMMAND ${CMAKE_COMMAND} -E touch "${NTGCALLS_LIBRARY}.signed"
++    DEPENDS "${NTGCALLS_LIBRARY}"
++    COMMENT "Ad-hoc signing libntgcalls.dylib")
++  add_custom_target(ntgcalls_signed ALL DEPENDS "${NTGCALLS_LIBRARY}.signed")
++endif()
++
+ # The upstream .so ships with full debug info (~115 MB); strip a copy for
+ # installation (~40 MB). Linking still uses the original.
+-set(NTGCALLS_STRIPPED "${CMAKE_BINARY_DIR}/ntgcalls-install/libntgcalls.so")
++set(NTGCALLS_STRIPPED "${CMAKE_BINARY_DIR}/ntgcalls-install/${NTGCALLS_LIB_NAME}")
+ find_program(NTGCALLS_STRIP strip)
+-if(NTGCALLS_STRIP)
++if(APPLE)
++  # macOS `strip` breaks signatures and is not needed for the dylib; copy as is.
++  set(NTGCALLS_STRIPPED "${NTGCALLS_LIBRARY}")
++elseif(NTGCALLS_STRIP)
+   add_custom_command(OUTPUT "${NTGCALLS_STRIPPED}"
+     COMMAND ${CMAKE_COMMAND} -E make_directory "${CMAKE_BINARY_DIR}/ntgcalls-install"
+     COMMAND ${NTGCALLS_STRIP} -o "${NTGCALLS_STRIPPED}" "${NTGCALLS_LIBRARY}"
+     DEPENDS "${NTGCALLS_LIBRARY}"
+-    COMMENT "Stripping libntgcalls.so for installation")
++    COMMENT "Stripping ${NTGCALLS_LIB_NAME} for installation")
+   add_custom_target(ntgcalls_stripped ALL DEPENDS "${NTGCALLS_STRIPPED}")
+ else()
+   set(NTGCALLS_STRIPPED "${NTGCALLS_LIBRARY}")
+@@ -89,4 +119,4 @@ endif()
+ install(FILES "${NTGCALLS_STRIPPED}" DESTINATION lib/retro-messenger)
+ 
+ set(HAVE_CALLS ON)
+-message(STATUS "Voice/video calls: enabled (ntgcalls v${NTGCALLS_VERSION}, ${NTGCALLS_ARCH})")
++message(STATUS "Voice/video calls: enabled (ntgcalls v${NTGCALLS_VERSION}, ${NTGCALLS_PLATFORM})")
+diff --git a/src/call/ntgcalls-api.cc b/src/call/ntgcalls-api.cc
+index 85e1414..85fe3c1 100644
+--- a/src/call/ntgcalls-api.cc
++++ b/src/call/ntgcalls-api.cc
+@@ -59,16 +59,25 @@ namespace
+       std::vector<std::string> candidates;
+       if (const char* override_path = std::getenv("NTGCALLS_LIBRARY"))
+         candidates.emplace_back(override_path);
++#ifdef __APPLE__
++      constexpr const char* kLibraryFile = "libntgcalls.dylib";
++      // RTLD_DEEPBIND is Linux-only; there is no bundled-GLib collision to
++      // work around on macOS, so plain RTLD_LOCAL is enough.
++      constexpr int kDlopenFlags = RTLD_LAZY | RTLD_LOCAL;
++#else
++      constexpr const char* kLibraryFile = "libntgcalls.so";
++      constexpr int kDlopenFlags = RTLD_LAZY | RTLD_LOCAL | RTLD_DEEPBIND;
++#endif
+       const auto exe_dir = executable_directory();
+       if (!exe_dir.empty())
+-        candidates.emplace_back(exe_dir + "/../lib/retro-messenger/libntgcalls.so");
++        candidates.emplace_back(exe_dir + "/../lib/retro-messenger/" + kLibraryFile);
+ #ifdef NTGCALLS_BUILD_TREE_LIB
+       candidates.emplace_back(NTGCALLS_BUILD_TREE_LIB); // dev/build tree
+ #endif
+-      candidates.emplace_back("libntgcalls.so"); // regular loader paths
++      candidates.emplace_back(kLibraryFile); // regular loader paths
+       for (const auto& candidate : candidates)
+       {
+-        result.handle = dlopen(candidate.c_str(), RTLD_LAZY | RTLD_LOCAL | RTLD_DEEPBIND);
++        result.handle = dlopen(candidate.c_str(), kDlopenFlags);
+         if (result.handle != nullptr)
+           break;
+       }

@@ -1,0 +1,127 @@
+diff -ruN --exclude=.git --exclude=auto clean/CMakeLists.txt /tmp/retro-probe/td/td-a17f87c4cff7b90b278d12b91ba0614383aaee82/CMakeLists.txt
+--- a/CMakeLists.txt	2026-06-13 13:18:22
++++ b/CMakeLists.txt	2026-10-23 00:34:19
+@@ -145,6 +145,17 @@
+ 
+ configure_file("${CMAKE_CURRENT_SOURCE_DIR}/td/telegram/GitCommitHash.cpp.in" "${CMAKE_CURRENT_BINARY_DIR}/td/telegram/GitCommitHash.cpp" @ONLY)
+ 
++# === SELF-HOSTED DC PATCH (CatGram) ===
++# Points every DC lookup at one self-hosted MTProto server instead of Telegram's
++# data centres. Tune with -DSELF_HOSTED_DC_HOST=... and friends, or edit here.
++set(SELF_HOSTED_DC_HOST "62.220.127.238" CACHE STRING "Self-hosted MTProto server host")
++set(SELF_HOSTED_DC_PORT 30001 CACHE STRING "Self-hosted MTProto server port")
++set(SELF_HOSTED_DC_ID 2 CACHE STRING "DC id advertised by the self-hosted server")
++set(SELF_HOSTED_API_ID 2040 CACHE STRING "Default api_id compiled in (0 keeps stock behaviour)")
++set(SELF_HOSTED_API_HASH "b18441a1ff607e10a989891a5462e627" CACHE STRING "Default api_hash compiled in")
++configure_file("${CMAKE_CURRENT_SOURCE_DIR}/td/telegram/net/SelfHostedServer.h.in" "${CMAKE_CURRENT_SOURCE_DIR}/td/telegram/net/SelfHostedServer.h" @ONLY)
++# === END SELF-HOSTED DC PATCH ===
++
+ add_subdirectory(tdtl)
+ 
+ if (TD_GENERATE_SOURCE_FILES)
+diff -ruN --exclude=.git --exclude=auto clean/td/telegram/Td.cpp /tmp/retro-probe/td/td-a17f87c4cff7b90b278d12b91ba0614383aaee82/td/telegram/Td.cpp
+--- a/td/telegram/Td.cpp	2026-06-13 13:18:22
++++ b/td/telegram/Td.cpp	2026-10-23 00:24:03
+@@ -15,6 +15,7 @@
+ #include "td/telegram/AuthManager.h"
+ #include "td/telegram/AutosaveManager.h"
+ #include "td/telegram/BackgroundManager.h"
++#include "td/telegram/net/SelfHostedServer.h"
+ #include "td/telegram/BoostManager.h"
+ #include "td/telegram/BotInfoManager.h"
+ #include "td/telegram/BotRecommendationManager.h"
+@@ -1416,6 +1417,17 @@
+     VLOG(td_init) << "Wrong string encoding";
+     return Status::Error(400, "Strings must be encoded in UTF-8");
+   }
++
++  // === SELF-HOSTED CREDENTIALS PATCH (CatGram) ===
++  // Fall back to the compiled-in api_id/api_hash when the client sends none,
++  // so a stock TDLib caller works against the self-hosted server unchanged.
++  if (parameters->api_id_ <= 0 && SELF_HOSTED_API_ID > 0) {
++    parameters->api_id_ = SELF_HOSTED_API_ID;
++  }
++  if (parameters->api_hash_.empty() && SELF_HOSTED_API_HASH[0] != '\0') {
++    parameters->api_hash_ = SELF_HOSTED_API_HASH;
++  }
++  // === END SELF-HOSTED CREDENTIALS PATCH ===
+ 
+   if (parameters->api_id_ <= 0) {
+     return Status::Error(400, "Valid api_id must be provided. Can be obtained at https://my.telegram.org");
+diff -ruN --exclude=.git --exclude=auto clean/td/telegram/net/ConnectionCreator.cpp /tmp/retro-probe/td/td-a17f87c4cff7b90b278d12b91ba0614383aaee82/td/telegram/net/ConnectionCreator.cpp
+--- a/td/telegram/net/ConnectionCreator.cpp	2026-06-13 13:18:22
++++ b/td/telegram/net/ConnectionCreator.cpp	2026-10-23 00:22:27
+@@ -38,6 +38,11 @@
+ #include "td/utils/tl_helpers.h"
+ 
+ #include <algorithm>
++
++// === SELF-HOSTED DC PATCH (CatGram) ===
++// Values come from CMake cache via td/telegram/net/SelfHostedServer.h.in.
++#include "td/telegram/net/SelfHostedServer.h"
++// === END SELF-HOSTED DC PATCH ===
+ #include <utility>
+ 
+ namespace td {
+@@ -1242,6 +1247,15 @@
+     }
+   };
+   vector<int> ports = {443, 80, 5222};
++
++  // === SELF-HOSTED DC PATCH (CatGram) — keep this block in sync with
++  // server TELESRV_LISTEN / TELESRV_DC. Remove it to restore stock Telegram. ===
++  {
++    add_ip_ports(SELF_HOSTED_DC_ID, {SELF_HOSTED_DC_HOST}, {SELF_HOSTED_DC_PORT});
++    return res;
++  }
++  // === END SELF-HOSTED DC PATCH ===
++
+ #if TD_EMSCRIPTEN
+   if (is_test) {
+     add_ip_ports(1, {"pluto.web.telegram.org/apiws_test"}, {443}, HostType::Url);
+diff -ruN --exclude=.git --exclude=auto clean/td/telegram/net/PublicRsaKeySharedMain.cpp /tmp/retro-probe/td/td-a17f87c4cff7b90b278d12b91ba0614383aaee82/td/telegram/net/PublicRsaKeySharedMain.cpp
+--- a/td/telegram/net/PublicRsaKeySharedMain.cpp	2026-06-13 13:18:22
++++ b/td/telegram/net/PublicRsaKeySharedMain.cpp	2026-10-23 00:23:43
+@@ -18,6 +18,27 @@
+     keys.push_back(RsaKey{std::move(rsa), fingerprint});
+   };
+ 
++  // === SELF-HOSTED RSA PATCH (CatGram) ===
++  // Mirrors data/server_rsa.pem on 62.220.127.238 (TELESRV_RSA_KEY).
++  // Regenerate this PEM with:
++  //   openssl rsa -in server_rsa.pem -RSAPublicKey_out
++  static auto self_hosted_rsa_key = [&] {
++    vector<RsaKey> keys;
++    add_pem(keys,
++            "-----BEGIN RSA PUBLIC KEY-----\n"
++            "MIIBCgKCAQEA2LnOaBr+GoK84cDv4c0h3cLZ2EAJsnI+syy7L7VdFV9JkHQ3ODA8\n"
++            "ydSND5DfmDp7ZMG5AQWu+ca9jrRNqgiHtmTdLcZfLM/2XXEqYznNfikpmelv0qA3\n"
++            "UvNdDTD24PVwXpMwe86j+On45NgZcvS464DUGcM2wPDY0zOIFInVL+R3u+XmIJ8E\n"
++            "FxdZxR+4ktDx6Pb+OoxmpH4Y9KHbLNwQ7MmFSW9Luw7z02D2ySD3edQIrdeXI6pW\n"
++            "aNOZhRIKfL94qJbdG0+7fUp0M7d2WjKKoyZ2Vb1Yt6BDUqr+pG/6/lJOL4p4EKEg\n"
++            "MwitjfUc+a9fPtKx25osD33c0L5889yVkQIDAQAB\n"
++            "-----END RSA PUBLIC KEY-----");
++    return std::make_shared<PublicRsaKeySharedMain>(std::move(keys));
++  }();
++  (void)is_test;
++  return self_hosted_rsa_key;
++  // === END SELF-HOSTED RSA PATCH ===
++
+   if (is_test) {
+     static auto test_public_rsa_key = [&] {
+       vector<RsaKey> keys;
+diff -ruN --exclude=.git --exclude=auto clean/td/telegram/net/SelfHostedServer.h.in /tmp/retro-probe/td/td-a17f87c4cff7b90b278d12b91ba0614383aaee82/td/telegram/net/SelfHostedServer.h.in
+--- a/td/telegram/net/SelfHostedServer.h.in	1970-01-01 03:30:00
++++ b/td/telegram/net/SelfHostedServer.h.in	2026-10-23 00:36:57
+@@ -0,0 +1,11 @@
++//
++// Self-hosted DC configuration (CatGram patch).
++// Generated from CMake cache; see td/CMakeLists.txt for the default values.
++//
++#pragma once
++
++#define SELF_HOSTED_DC_HOST "@SELF_HOSTED_DC_HOST@"
++#define SELF_HOSTED_DC_ID @SELF_HOSTED_DC_ID@
++#define SELF_HOSTED_DC_PORT @SELF_HOSTED_DC_PORT@
++#define SELF_HOSTED_API_ID @SELF_HOSTED_API_ID@
++#define SELF_HOSTED_API_HASH "@SELF_HOSTED_API_HASH@"
