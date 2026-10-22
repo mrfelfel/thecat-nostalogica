@@ -17,7 +17,28 @@ env:
   TD_COMMIT: a17f87c4cff7b90b278d12b91ba0614383aaee82
   RETRO_REPO: https://github.com/RetroMessenger/retro-messenger.git
 
+permissions:
+  contents: write
+
 jobs:
+  release:
+    runs-on: ubuntu-24.04
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    steps:
+      - uses: actions/checkout@v4
+      - name: Delete the rolling release
+        run: gh release delete latest --yes --cleanup-tag || true
+        env:
+          GH_TOKEN: ${{ github.token }}
+      - name: Create the rolling release
+        run: |
+          gh release create latest \
+            --title "Latest self-hosted build" \
+            --notes "Built from $(git rev-parse --short HEAD). Linux x86_64 and macOS arm64\.\n\nLog in with a phone number registered on the CatGram server (dev code 12345)." \
+            --prerelease
+        env:
+          GH_TOKEN: ${{ github.token }}
+
   build-linux:
     runs-on: ubuntu-24.04
     steps:
@@ -55,11 +76,22 @@ jobs:
       - name: Build
         run: cmake --build retro/build -j "$(nproc)"
 
+      - name: Package
+        run: |
+          cp retro/build/src/retro-messenger retro-messenger-linux-x86_64
+          tar czf retro-messenger-linux-x86_64.tar.gz retro-messenger-linux-x86_64
+
       - uses: actions/upload-artifact@v4
         with:
           name: retro-messenger-linux-x86_64
-          path: retro/build/src/retro-messenger
+          path: retro-messenger-linux-x86_64.tar.gz
           if-no-files-found: error
+
+      - name: Attach to release
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        run: gh release upload latest retro-messenger-linux-x86_64.tar.gz --clobber
+        env:
+          GH_TOKEN: ${{ github.token }}
 
   build-macos:
     runs-on: macos-14
@@ -107,6 +139,12 @@ jobs:
           name: retro-messenger-macos-arm64
           path: retro-messenger-macos-arm64.zip
           if-no-files-found: error
+
+      - name: Attach to release
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        run: gh release upload latest retro-messenger-macos-arm64.zip --clobber
+        env:
+          GH_TOKEN: ${{ github.token }}
 
   verify-tdlib:
     runs-on: ubuntu-24.04
