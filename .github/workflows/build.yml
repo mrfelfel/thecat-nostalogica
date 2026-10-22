@@ -96,10 +96,16 @@ jobs:
       - name: Build
         run: cmake --build retro/build -j "$(sysctl -n hw.ncpu)"
 
+      - name: Package .app
+        run: |
+          ditto -c -k --sequesterRsrc --keepParent \
+            retro/build/src/retro-messenger.app \
+            retro-messenger-macos-arm64.zip
+
       - uses: actions/upload-artifact@v4
         with:
           name: retro-messenger-macos-arm64
-          path: retro/build/src/retro-messenger
+          path: retro-messenger-macos-arm64.zip
           if-no-files-found: error
 
   verify-tdlib:
