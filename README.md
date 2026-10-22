@@ -12,7 +12,7 @@ the patches, the build scripts, and CI that turn upstream into a self-hosted bui
 |---|---|---|
 | `patches/tdlib-selfhosted.patch` | TDLib `a17f87c4` | Replaces Telegram's DC list with one self-hosted DC, swaps in the server's RSA public key, and fills in a default `api_id`/`api_hash` when the client sends none |
 | `patches/client-selfhosted.patch` | Retro Messenger | Uses a local patched TDLib (`-DTD_PATCH_DIR`), drops the `TG_APP_ID`/`TG_APP_HASH` login gate |
-| `patches/client-calls-macos.patch` | Retro Messenger | Wires the upstream `ntgcalls.macos-arm64` prebuilt for voice/video on Apple Silicon |
+|  `patches/client-calls-macos.patch` | Retro Messenger | Wires the upstream `ntgcalls.macos-arm64` prebuilt for voice/video on Apple Silicon |
 
 ## CI
 

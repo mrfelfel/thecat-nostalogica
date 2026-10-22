@@ -1,0 +1,24 @@
+diff --git a/cmake/Rlottie.cmake b/cmake/Rlottie.cmake
+index 1acda75..79b368a 100644
+--- a/cmake/Rlottie.cmake
++++ b/cmake/Rlottie.cmake
+@@ -49,6 +49,19 @@ FetchContent_Declare(rlottie
+ )
+ FetchContent_MakeAvailable(rlottie)
+ 
++# rlottie enables its NEON drawing path whenever __ARM_NEON__ is defined, but
++# the pixman assembly that path calls is AArch32-only (`.arch armv7a`,
++# q-registers) and rlottie only compiles it when ARCH is literally "arm".
++# On any 64-bit ARM target that leaves undefined pixman_*_asm_neon symbols at
++# link time. Fall back to the portable C path via a forced include.
++if(CMAKE_SYSTEM_PROCESSOR MATCHES "^(aarch64|arm64)$")
++  set(RLOTTIE_NO_NEON_HEADER "${CMAKE_BINARY_DIR}/rlottie-no-neon.h")
++  file(WRITE "${RLOTTIE_NO_NEON_HEADER}" "#undef __ARM_NEON__\n")
++  target_compile_options(rlottie PRIVATE
++    "-include" "${RLOTTIE_NO_NEON_HEADER}")
++  message(STATUS "rlottie: NEON disabled on ${CMAKE_SYSTEM_PROCESSOR} (no AArch64 asm upstream)")
++endif()
++
+ set(BUILD_SHARED_LIBS "${RLOTTIE_SAVED_BUILD_SHARED_LIBS}")
+ unset(CMAKE_POLICY_VERSION_MINIMUM)
+ 

@@ -82,6 +82,7 @@ jobs:
           cd retro
           git apply ../patches/client-selfhosted.patch
           git apply ../patches/client-calls-macos.patch
+          git apply ../patches/client-rlottie-arm64.patch
 
       - name: Configure
         run: |
